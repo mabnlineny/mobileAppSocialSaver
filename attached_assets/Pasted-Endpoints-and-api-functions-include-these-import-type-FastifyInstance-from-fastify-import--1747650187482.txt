@@ -1,0 +1,238 @@
+Endpoints and api functions include these
+
+import type { FastifyInstance } from 'fastify'; import { downloadContent } from '../controllers/downloader.controller.js'; import { Readable } from 'stream'; import DownloaderService from '../services/downloader.service';
+
+const downloaderService = new DownloaderService();
+
+interface StreamRequest { url: string; itag: string; }
+
+export default async function downloaderRoutes(fastify: FastifyInstance) { // Get video info endpoint fastify.post('/download', downloadContent);
+
+// Stream video endpoint
+fastify.get('/stream', async (request, reply) => {
+    try {
+        const { url, itag } = request.query as StreamRequest;
+
+        if (!url || !itag) {
+            return reply.status(400).send({ error: 'URL and itag are required' });
+        }
+
+        const stream = await downloaderService.getVideoStream(url, itag);
+
+        // Set appropriate headers
+        reply.header('Content-Type', 'video/mp4');
+        reply.header('Transfer-Encoding', 'chunked');
+
+        // Pipe the stream to the response
+        return reply.send(stream);
+    } catch (error: unknown) {
+        console.error('Stream error:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Failed to stream video';
+        return reply.status(500).send({ error: errorMessage });
+    }
+});
+
+}
+
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'; import bcrypt from 'bcryptjs'; import fs from 'fs'; import path from 'path';
+
+interface User { email: string; password: string; created: number; downloads: DownloadLog[]; }
+
+interface DownloadLog { email: string | null; type: string; status: 'attempt' | 'complete' | 'consent'; meta: any; ageConsent: boolean; date: number; }
+
+interface SignupRequest { email: string; password: string; }
+
+interface LoginRequest { email: string; password: string; }
+
+interface LogRequest { email?: string; type: string; status: 'attempt' | 'complete' | 'consent'; meta: any; ageConsent: boolean; }
+
+const USERS_DB = path.join(__dirname, '../../db/users.json'); const GUEST_LOG = path.join(__dirname, '../../db/guest_downloads.json');
+
+function readUsers(): User[] { if (!fs.existsSync(USERS_DB)) return []; return JSON.parse(fs.readFileSync(USERS_DB, 'utf-8')); }
+
+function writeUsers(users: User[]): void { fs.writeFileSync(USERS_DB, JSON.stringify(users, null, 2)); }
+
+function logGuestDownload(entry: DownloadLog): void { let logs: DownloadLog[] = []; if (fs.existsSync(GUEST_LOG)) { logs = JSON.parse(fs.readFileSync(GUEST_LOG, 'utf-8')); } logs.unshift(entry); fs.writeFileSync(GUEST_LOG, JSON.stringify(logs.slice(0, 1000), null, 2)); }
+
+export default async function userRoutes(fastify: FastifyInstance) { // Signup fastify.post<{ Body: SignupRequest }>('/signup', async (request: FastifyRequest<{ Body: SignupRequest }>, reply: FastifyReply) => { const { email, password } = request.body; if (!email || !password) { return reply.code(400).send({ message: 'Email and password required' }); }
+
+    const users = readUsers();
+    if (users.find(u => u.email === email)) {
+        return reply.code(409).send({ message: 'User already exists' });
+    }
+
+    const hash = await bcrypt.hash(password, 10);
+    users.push({ email, password: hash, created: Date.now(), downloads: [] });
+    writeUsers(users);
+    reply.send({ success: true });
+});
+
+// Login
+fastify.post<{ Body: LoginRequest }>('/login', async (request: FastifyRequest<{ Body: LoginRequest }>, reply: FastifyReply) => {
+    const { email, password } = request.body;
+    const users = readUsers();
+    const user = users.find(u => u.email === email);
+    if (!user) {
+        return reply.code(401).send({ message: 'Invalid credentials' });
+    }
+
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) {
+        return reply.code(401).send({ message: 'Invalid credentials' });
+    }
+
+    reply.send({ success: true, email });
+});
+
+// Get profile
+fastify.get('/profile', async (request: FastifyRequest<{ Querystring: { email: string } }>, reply: FastifyReply) => {
+    const { email } = request.query;
+    const users = readUsers();
+    const user = users.find(u => u.email === email);
+    if (!user) {
+        return reply.code(404).send({ message: 'User not found' });
+    }
+    reply.send({ email: user.email, created: user.created, downloads: user.downloads });
+});
+
+// Social login stubs
+fastify.post('/connect/instagram', async (request: FastifyRequest, reply: FastifyReply) => {
+    reply.send({ success: true, message: 'Instagram connect stub' });
+});
+
+fastify.post('/connect/twitter', async (request: FastifyRequest, reply: FastifyReply) => {
+    reply.send({ success: true, message: 'Twitter connect stub' });
+});
+
+fastify.post('/connect/youtube', async (request: FastifyRequest, reply: FastifyReply) => {
+    reply.send({ success: true, message: 'YouTube connect stub' });
+});
+
+// Log download attempt/completion/consent
+fastify.post<{ Body: LogRequest }>('/log', async (request: FastifyRequest<{ Body: LogRequest }>, reply: FastifyReply) => {
+    const { email, type, status, meta, ageConsent } = request.body;
+    const entry: DownloadLog = {
+        email: email || null,
+        type,
+        status,
+        meta,
+        ageConsent: !!ageConsent,
+        date: Date.now(),
+    };
+
+    if (email) {
+        const users = readUsers();
+        const user = users.find(u => u.email === email);
+        if (user) {
+            user.downloads = user.downloads || [];
+            user.downloads.unshift(entry);
+            writeUsers(users);
+            return reply.send({ success: true });
+        }
+    }
+
+    logGuestDownload(entry);
+    reply.send({ success: true });
+});
+
+}
+
+export { userRoutes };
+
+import type { FastifyInstance } from 'fastify'; import { createAuthService } from '../services/auth.service.js'; import { authConfig } from '../config/auth.config.js';
+
+export async function authRoutes(fastify: FastifyInstance) { const authService = createAuthService(fastify);
+
+// Login route
+fastify.post<{ Body: { email: string; password: string } }>('/login', async (request, reply) => {
+    const { email, password } = request.body;
+    try {
+        const { token, user } = await authService.login(email, password);
+        return { success: true, token, user };
+    } catch (error) {
+        reply.code(401);
+        return { success: false, error: 'Invalid credentials' };
+    }
+});
+
+// Get platform auth URL
+fastify.get<{ Params: { platform: string } }>('/auth-url/:platform', async (request, reply) => {
+    const { platform } = request.params;
+    try {
+        const authUrl = await authService.getAuthUrl(platform);
+        return { success: true, authUrl };
+    } catch (error) {
+        reply.code(400);
+        return { success: false, error: 'Failed to get auth URL' };
+    }
+});
+
+// Check platform login status
+fastify.get<{ Params: { platform: string } }>('/check-platform/:platform', async (request, reply) => {
+    const { platform } = request.params;
+    try {
+        const isLoggedIn = await authService.checkPlatformLogin(platform);
+        return { success: true, isLoggedIn };
+    } catch (error) {
+        reply.code(400);
+        return { success: false, error: 'Failed to check platform login status' };
+    }
+});
+
+// Connect platform
+fastify.post<{ Params: { platform: string }; Body: { code: string } }>('/connect/:platform', async (request, reply) => {
+    const { platform } = request.params;
+    const { code } = request.body;
+    try {
+        const connectedPlatform = await authService.connectPlatform(platform, code);
+        return { success: true, platform: connectedPlatform };
+    } catch (error) {
+        reply.code(400);
+        return { success: false, error: 'Failed to connect platform' };
+    }
+});
+
+// Disconnect platform
+fastify.post<{ Params: { platform: string } }>('/disconnect/:platform', async (request, reply) => {
+    const { platform } = request.params;
+    try {
+        await authService.disconnectPlatform(platform);
+        return { success: true };
+    } catch (error) {
+        reply.code(400);
+        return { success: false, error: 'Failed to disconnect platform' };
+    }
+});
+
+// Get current user
+fastify.get('/me', async (request, reply) => {
+    try {
+        // TODO: Get actual user ID from JWT token
+        const userId = '1';
+        const user = await authService.getCurrentUser(userId);
+        return { success: true, user };
+    } catch (error) {
+        reply.code(401);
+        return { success: false, error: 'Not authenticated' };
+    }
+});
+
+// Platform OAuth callbacks
+fastify.get<{ Params: { platform: string }; Querystring: { code: string; state: string } }>(
+    '/callback/:platform',
+    async (request, reply) => {
+        const { platform } = request.params;
+        const { code, state } = request.query;
+        try {
+            const connectedPlatform = await authService.connectPlatform(platform, code);
+            // Redirect to frontend with success message
+            reply.redirect(`${authConfig.platforms[platform].redirectUri}?success=true&platform=${platform}`);
+        } catch (error: any) {
+            // Redirect to frontend with error message
+            const errorMessage = error?.message || 'Failed to connect platform';
+            reply.redirect(`${authConfig.platforms[platform].redirectUri}?error=${encodeURIComponent(errorMessage)}`);
+        }
+    }
+);
+
+}

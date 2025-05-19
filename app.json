@@ -1,0 +1,45 @@
+{
+  "name": "main",
+  "displayName": "SocialSaver",
+  "expo": {
+    "name": "SocialSaver",
+    "slug": "social-saver",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./src/assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./src/assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#667eea"
+    },
+    "updates": {
+      "fallbackToCacheTimeout": 0
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.socialsaver.app",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "SocialSaver needs access to your photo library to save downloaded media.",
+        "NSPhotoLibraryAddUsageDescription": "SocialSaver needs access to your photo library to save downloaded media."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./src/assets/adaptive-icon.png",
+        "backgroundColor": "#667eea"
+      },
+      "package": "com.socialsaver.app",
+      "permissions": [
+        "WRITE_EXTERNAL_STORAGE",
+        "READ_EXTERNAL_STORAGE"
+      ]
+    },
+    "web": {
+      "favicon": "./src/assets/favicon.png"
+    }
+  }
+}

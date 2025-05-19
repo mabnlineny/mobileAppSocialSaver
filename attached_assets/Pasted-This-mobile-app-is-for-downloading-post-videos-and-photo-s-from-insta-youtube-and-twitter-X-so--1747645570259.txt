@@ -1,0 +1,1109 @@
+This mobile app is for downloading post ,videos and photo's from insta, youtube and twitter (X), so for downloading we need to as permission and once it;s given I want to setup a folder in Downloads section called SocialSaver And inside that 1 for VIdeo and another for Audio,
+When video files are downloaed,it shpuld go to vidoes and similar for audio files
+Once the data is saved, show a small notification bar saying it's downloaded successfully and saved in the respective folder
+And make sure to use same stylings and functions, api runns in 2500
+mobile must run in 2100 , and ther should be no issues with the API calling and integration at any cost   
+
+
+I want to create an app in mobile, for android and iOS,that can download post from social Media like instagram, youtube and twitter (x), I have all the back end ready, I want to build a mobile app to support that
+
+Endpoints and api functions include these
+
+import type { FastifyInstance } from 'fastify'; import { downloadContent } from '../controllers/downloader.controller.js'; import { Readable } from 'stream'; import DownloaderService from '../services/downloader.service';
+
+const downloaderService = new DownloaderService();
+
+interface StreamRequest { url: string; itag: string; }
+
+export default async function downloaderRoutes(fastify: FastifyInstance) { // Get video info endpoint fastify.post('/download', downloadContent);
+
+// Stream video endpoint
+fastify.get('/stream', async (request, reply) => {
+    try {
+        const { url, itag } = request.query as StreamRequest;
+
+        if (!url || !itag) {
+            return reply.status(400).send({ error: 'URL and itag are required' });
+        }
+
+        const stream = await downloaderService.getVideoStream(url, itag);
+
+        // Set appropriate headers
+        reply.header('Content-Type', 'video/mp4');
+        reply.header('Transfer-Encoding', 'chunked');
+
+        // Pipe the stream to the response
+        return reply.send(stream);
+    } catch (error: unknown) {
+        console.error('Stream error:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Failed to stream video';
+        return reply.status(500).send({ error: errorMessage });
+    }
+});
+
+}
+
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'; import bcrypt from 'bcryptjs'; import fs from 'fs'; import path from 'path';
+
+interface User { email: string; password: string; created: number; downloads: DownloadLog[]; }
+
+interface DownloadLog { email: string | null; type: string; status: 'attempt' | 'complete' | 'consent'; meta: any; ageConsent: boolean; date: number; }
+
+interface SignupRequest { email: string; password: string; }
+
+interface LoginRequest { email: string; password: string; }
+
+interface LogRequest { email?: string; type: string; status: 'attempt' | 'complete' | 'consent'; meta: any; ageConsent: boolean; }
+
+const USERS_DB = path.join(__dirname, '../../db/users.json'); const GUEST_LOG = path.join(__dirname, '../../db/guest_downloads.json');
+
+function readUsers(): User[] { if (!fs.existsSync(USERS_DB)) return []; return JSON.parse(fs.readFileSync(USERS_DB, 'utf-8')); }
+
+function writeUsers(users: User[]): void { fs.writeFileSync(USERS_DB, JSON.stringify(users, null, 2)); }
+
+function logGuestDownload(entry: DownloadLog): void { let logs: DownloadLog[] = []; if (fs.existsSync(GUEST_LOG)) { logs = JSON.parse(fs.readFileSync(GUEST_LOG, 'utf-8')); } logs.unshift(entry); fs.writeFileSync(GUEST_LOG, JSON.stringify(logs.slice(0, 1000), null, 2)); }
+
+export default async function userRoutes(fastify: FastifyInstance) { // Signup fastify.post<{ Body: SignupRequest }>('/signup', async (request: FastifyRequest<{ Body: SignupRequest }>, reply: FastifyReply) => { const { email, password } = request.body; if (!email || !password) { return reply.code(400).send({ message: 'Email and password required' }); }
+
+    const users = readUsers();
+    if (users.find(u => u.email === email)) {
+        return reply.code(409).send({ message: 'User already exists' });
+    }
+
+    const hash = await bcrypt.hash(password, 10);
+    users.push({ email, password: hash, created: Date.now(), downloads: [] });
+    writeUsers(users);
+    reply.send({ success: true });
+});
+
+// Login
+fastify.post<{ Body: LoginRequest }>('/login', async (request: FastifyRequest<{ Body: LoginRequest }>, reply: FastifyReply) => {
+    const { email, password } = request.body;
+    const users = readUsers();
+    const user = users.find(u => u.email === email);
+    if (!user) {
+        return reply.code(401).send({ message: 'Invalid credentials' });
+    }
+
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) {
+        return reply.code(401).send({ message: 'Invalid credentials' });
+    }
+
+    reply.send({ success: true, email });
+});
+
+// Get profile
+fastify.get('/profile', async (request: FastifyRequest<{ Querystring: { email: string } }>, reply: FastifyReply) => {
+    const { email } = request.query;
+    const users = readUsers();
+    const user = users.find(u => u.email === email);
+    if (!user) {
+        return reply.code(404).send({ message: 'User not found' });
+    }
+    reply.send({ email: user.email, created: user.created, downloads: user.downloads });
+});
+
+// Social login stubs
+fastify.post('/connect/instagram', async (request: FastifyRequest, reply: FastifyReply) => {
+    reply.send({ success: true, message: 'Instagram connect stub' });
+});
+
+fastify.post('/connect/twitter', async (request: FastifyRequest, reply: FastifyReply) => {
+    reply.send({ success: true, message: 'Twitter connect stub' });
+});
+
+fastify.post('/connect/youtube', async (request: FastifyRequest, reply: FastifyReply) => {
+    reply.send({ success: true, message: 'YouTube connect stub' });
+});
+
+// Log download attempt/completion/consent
+fastify.post<{ Body: LogRequest }>('/log', async (request: FastifyRequest<{ Body: LogRequest }>, reply: FastifyReply) => {
+    const { email, type, status, meta, ageConsent } = request.body;
+    const entry: DownloadLog = {
+        email: email || null,
+        type,
+        status,
+        meta,
+        ageConsent: !!ageConsent,
+        date: Date.now(),
+    };
+
+    if (email) {
+        const users = readUsers();
+        const user = users.find(u => u.email === email);
+        if (user) {
+            user.downloads = user.downloads || [];
+            user.downloads.unshift(entry);
+            writeUsers(users);
+            return reply.send({ success: true });
+        }
+    }
+
+    logGuestDownload(entry);
+    reply.send({ success: true });
+});
+
+}
+
+export { userRoutes };
+
+import type { FastifyInstance } from 'fastify'; import { createAuthService } from '../services/auth.service.js'; import { authConfig } from '../config/auth.config.js';
+
+export async function authRoutes(fastify: FastifyInstance) { const authService = createAuthService(fastify);
+
+// Login route
+fastify.post<{ Body: { email: string; password: string } }>('/login', async (request, reply) => {
+    const { email, password } = request.body;
+    try {
+        const { token, user } = await authService.login(email, password);
+        return { success: true, token, user };
+    } catch (error) {
+        reply.code(401);
+        return { success: false, error: 'Invalid credentials' };
+    }
+});
+
+// Get platform auth URL
+fastify.get<{ Params: { platform: string } }>('/auth-url/:platform', async (request, reply) => {
+    const { platform } = request.params;
+    try {
+        const authUrl = await authService.getAuthUrl(platform);
+        return { success: true, authUrl };
+    } catch (error) {
+        reply.code(400);
+        return { success: false, error: 'Failed to get auth URL' };
+    }
+});
+
+// Check platform login status
+fastify.get<{ Params: { platform: string } }>('/check-platform/:platform', async (request, reply) => {
+    const { platform } = request.params;
+    try {
+        const isLoggedIn = await authService.checkPlatformLogin(platform);
+        return { success: true, isLoggedIn };
+    } catch (error) {
+        reply.code(400);
+        return { success: false, error: 'Failed to check platform login status' };
+    }
+});
+
+// Connect platform
+fastify.post<{ Params: { platform: string }; Body: { code: string } }>('/connect/:platform', async (request, reply) => {
+    const { platform } = request.params;
+    const { code } = request.body;
+    try {
+        const connectedPlatform = await authService.connectPlatform(platform, code);
+        return { success: true, platform: connectedPlatform };
+    } catch (error) {
+        reply.code(400);
+        return { success: false, error: 'Failed to connect platform' };
+    }
+});
+
+// Disconnect platform
+fastify.post<{ Params: { platform: string } }>('/disconnect/:platform', async (request, reply) => {
+    const { platform } = request.params;
+    try {
+        await authService.disconnectPlatform(platform);
+        return { success: true };
+    } catch (error) {
+        reply.code(400);
+        return { success: false, error: 'Failed to disconnect platform' };
+    }
+});
+
+// Get current user
+fastify.get('/me', async (request, reply) => {
+    try {
+        // TODO: Get actual user ID from JWT token
+        const userId = '1';
+        const user = await authService.getCurrentUser(userId);
+        return { success: true, user };
+    } catch (error) {
+        reply.code(401);
+        return { success: false, error: 'Not authenticated' };
+    }
+});
+
+// Platform OAuth callbacks
+fastify.get<{ Params: { platform: string }; Querystring: { code: string; state: string } }>(
+    '/callback/:platform',
+    async (request, reply) => {
+        const { platform } = request.params;
+        const { code, state } = request.query;
+        try {
+            const connectedPlatform = await authService.connectPlatform(platform, code);
+            // Redirect to frontend with success message
+            reply.redirect(`${authConfig.platforms[platform].redirectUri}?success=true&platform=${platform}`);
+        } catch (error: any) {
+            // Redirect to frontend with error message
+            const errorMessage = error?.message || 'Failed to connect platform';
+            reply.redirect(`${authConfig.platforms[platform].redirectUri}?error=${encodeURIComponent(errorMessage)}`);
+        }
+    }
+);
+
+}
+
+Don'tmove into api functions as there're perfectly running for the web app Now, I want to run it in the mobile app, before starting
+
+This app is for downloading post ,videos and photo's from insta, youtube and twitter (X), so for downloading we need to as permission and once it;s given I want to setup a folder in Downloads section called SocialSaver And inside that 1 for VIdeo and another for Audio, When video files are downloaed,it shpuld go to vidoes and similar for audio files Once the data is saved, show a small notification bar saying it's downloaded successfully and saved in the respective folder And make sure to use same stylings and functions, api runns in 2500 mobile must run in 2100 , and ther should be no issues with the API calling and integration at any cost
+
+Debugger should be available
+
+Can you build it
+
+
+Base UI looks like this
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SocialSnap - Download Posts from Any Platform</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    />
+    <style>
+      .gradient-bg {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      }
+      .platform-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1);
+      }
+      .download-btn {
+        transition: all 0.3s ease;
+      }
+      .download-btn:hover {
+        transform: scale(1.05);
+      }
+      .input-glow:focus {
+        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.3);
+      }
+      .wave-shape {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        overflow: hidden;
+        line-height: 0;
+      }
+      .wave-shape svg {
+        position: relative;
+        display: block;
+        width: calc(100% + 1.3px);
+        height: 150px;
+      }
+      .wave-shape .shape-fill {
+        fill: #ffffff;
+      }
+    </style>
+  </head>
+  <body class="font-sans antialiased text-gray-800">
+    <!-- Header/Navigation -->
+    <header class="gradient-bg text-white sticky top-0 z-50 shadow-md">
+      <div
+        class="container mx-auto px-4 py-4 flex justify-between items-center"
+      >
+        <div class="flex items-center space-x-2">
+          <i class="fas fa-share-alt text-2xl"></i>
+          <h1 class="text-2xl font-bold">SocialSnap</h1>
+        </div>
+        <nav class="hidden md:flex space-x-8">
+          <a href="#features" class="hover:text-gray-200 transition"
+            >Features</a
+          >
+          <a href="#how-it-works" class="hover:text-gray-200 transition"
+            >How It Works</a
+          >
+          <a href="#supported-platforms" class="hover:text-gray-200 transition"
+            >Platforms</a
+          >
+          <a href="#faq" class="hover:text-gray-200 transition">FAQ</a>
+        </nav>
+        <button class="md:hidden text-xl">
+          <i class="fas fa-bars"></i>
+        </button>
+      </div>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="gradient-bg text-white relative pb-20">
+      <div
+        class="container mx-auto px-4 py-20 flex flex-col md:flex-row items-center"
+      >
+        <div class="md:w-1/2 mb-10 md:mb-0">
+          <h1 class="text-4xl md:text-5xl font-bold mb-6">
+            Download Posts from Any Social Media
+          </h1>
+          <p class="text-xl mb-8">
+            Instagram, Facebook, YouTube, Twitter, LinkedIn and more - all in
+            one place!
+          </p>
+          <div class="flex flex-col sm:flex-row gap-4">
+            <div class="relative flex-grow">
+              <input
+                type="text"
+                placeholder="Paste your link here..."
+                class="w-full py-4 px-6 rounded-full text-gray-800 input-glow focus:outline-none"
+              />
+              <button
+                class="absolute right-2 top-1/2 transform -translate-y-1/2 bg-blue-600 text-white py-2 px-6 rounded-full hover:bg-blue-700 transition"
+              >
+                <i class="fas fa-download mr-2"></i> Download
+              </button>
+            </div>
+          </div>
+          <p class="text-sm mt-4 text-gray-200">
+            Supports videos, images, stories, reels, and more!
+          </p>
+        </div>
+        <div class="md:w-1/2 flex justify-center">
+          <img
+            src="https://cdn-icons-png.flaticon.com/512/3669/3669973.png"
+            alt="Social Media Download"
+            class="w-full max-w-md"
+          />
+        </div>
+      </div>
+      <div class="wave-shape">
+        <svg
+          data-name="Layer 1"
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 1200 120"
+          preserveAspectRatio="none"
+        >
+          <path
+            d="M321.39,56.44c58-10.79,114.16-30.13,172-41.86,82.39-16.72,168.19-17.73,250.45-.39C823.78,31,906.67,72,985.66,92.83c70.05,18.48,146.53,26.09,214.34,3V0H0V27.35A600.21,600.21,0,0,0,321.39,56.44Z"
+            class="shape-fill"
+          ></path>
+        </svg>
+      </div>
+    </section>
+
+    <!-- Features Section -->
+    <section id="features" class="py-20 bg-gray-50">
+      <div class="container mx-auto px-4">
+        <h2 class="text-3xl font-bold text-center mb-16">
+          Why Choose SocialSnap?
+        </h2>
+        <div class="grid md:grid-cols-3 gap-10">
+          <div class="bg-white p-8 rounded-xl shadow-md text-center">
+            <div
+              class="bg-blue-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6"
+            >
+              <i class="fas fa-bolt text-blue-600 text-2xl"></i>
+            </div>
+            <h3 class="text-xl font-semibold mb-3">Lightning Fast</h3>
+            <p class="text-gray-600">
+              Download content in seconds with our high-speed servers.
+            </p>
+          </div>
+          <div class="bg-white p-8 rounded-xl shadow-md text-center">
+            <div
+              class="bg-purple-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6"
+            >
+              <i class="fas fa-shield-alt text-purple-600 text-2xl"></i>
+            </div>
+            <h3 class="text-xl font-semibold mb-3">Secure & Private</h3>
+            <p class="text-gray-600">
+              We don't store your data or require login credentials.
+            </p>
+          </div>
+          <div class="bg-white p-8 rounded-xl shadow-md text-center">
+            <div
+              class="bg-green-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6"
+            >
+              <i class="fas fa-mobile-alt text-green-600 text-2xl"></i>
+            </div>
+            <h3 class="text-xl font-semibold mb-3">All Devices</h3>
+            <p class="text-gray-600">
+              Works perfectly on desktop, tablet, and mobile devices.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- How It Works Section -->
+    <section id="how-it-works" class="py-20">
+      <div class="container mx-auto px-4">
+        <h2 class="text-3xl font-bold text-center mb-16">How It Works</h2>
+        <div class="grid md:grid-cols-3 gap-8">
+          <div class="flex flex-col items-center text-center">
+            <div
+              class="bg-blue-600 text-white w-12 h-12 rounded-full flex items-center justify-center mb-4 text-xl font-bold"
+            >
+              1
+            </div>
+            <h3 class="text-xl font-semibold mb-3">Copy Link</h3>
+            <p class="text-gray-600">
+              Copy the URL of the post you want to download from any supported
+              platform.
+            </p>
+          </div>
+          <div class="flex flex-col items-center text-center">
+            <div
+              class="bg-blue-600 text-white w-12 h-12 rounded-full flex items-center justify-center mb-4 text-xl font-bold"
+            >
+              2
+            </div>
+            <h3 class="text-xl font-semibold mb-3">Paste Here</h3>
+            <p class="text-gray-600">
+              Paste the link in our downloader and click the download button.
+            </p>
+          </div>
+          <div class="flex flex-col items-center text-center">
+            <div
+              class="bg-blue-600 text-white w-12 h-12 rounded-full flex items-center justify-center mb-4 text-xl font-bold"
+            >
+              3
+            </div>
+            <h3 class="text-xl font-semibold mb-3">Download</h3>
+            <p class="text-gray-600">
+              Choose your preferred quality and format, then save to your
+              device.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Supported Platforms Section -->
+    <section id="supported-platforms" class="py-20 bg-gray-50">
+      <div class="container mx-auto px-4">
+        <h2 class="text-3xl font-bold text-center mb-16">
+          Supported Platforms
+        </h2>
+        <div class="grid sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6">
+          <!-- Instagram -->
+          <div
+            class="platform-card bg-white p-6 rounded-xl shadow-md text-center transition duration-300"
+          >
+            <div
+              class="bg-gradient-to-br from-purple-500 to-pink-500 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4"
+            >
+              <i class="fab fa-instagram text-white text-3xl"></i>
+            </div>
+            <h3 class="text-lg font-semibold mb-2">Instagram</h3>
+            <p class="text-sm text-gray-600">Posts, Stories, Reels, IGTV</p>
+          </div>
+
+          <!-- Facebook -->
+          <div
+            class="platform-card bg-white p-6 rounded-xl shadow-md text-center transition duration-300"
+          >
+            <div
+              class="bg-blue-600 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4"
+            >
+              <i class="fab fa-facebook-f text-white text-3xl"></i>
+            </div>
+            <h3 class="text-lg font-semibold mb-2">Facebook</h3>
+            <p class="text-sm text-gray-600">Videos, Photos, Stories</p>
+          </div>
+
+          <!-- YouTube -->
+          <div
+            class="platform-card bg-white p-6 rounded-xl shadow-md text-center transition duration-300"
+          >
+            <div
+              class="bg-red-600 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4"
+            >
+              <i class="fab fa-youtube text-white text-3xl"></i>
+            </div>
+            <h3 class="text-lg font-semibold mb-2">YouTube</h3>
+            <p class="text-sm text-gray-600">Videos, Shorts, Thumbnails</p>
+          </div>
+
+          <!-- Twitter -->
+          <div
+            class="platform-card bg-white p-6 rounded-xl shadow-md text-center transition duration-300"
+          >
+            <div
+              class="bg-blue-400 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4"
+            >
+              <i class="fab fa-twitter text-white text-3xl"></i>
+            </div>
+            <h3 class="text-lg font-semibold mb-2">Twitter</h3>
+            <p class="text-sm text-gray-600">Tweets, Videos, GIFs</p>
+          </div>
+
+          <!-- LinkedIn -->
+          <div
+            class="platform-card bg-white p-6 rounded-xl shadow-md text-center transition duration-300"
+          >
+            <div
+              class="bg-blue-700 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4"
+            >
+              <i class="fab fa-linkedin-in text-white text-3xl"></i>
+            </div>
+            <h3 class="text-lg font-semibold mb-2">LinkedIn</h3>
+            <p class="text-sm text-gray-600">Posts, Videos</p>
+          </div>
+
+          <!-- TikTok -->
+          <div
+            class="platform-card bg-white p-6 rounded-xl shadow-md text-center transition duration-300"
+          >
+            <div
+              class="bg-black w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4"
+            >
+              <i class="fab fa-tiktok text-white text-3xl"></i>
+            </div>
+            <h3 class="text-lg font-semibold mb-2">TikTok</h3>
+            <p class="text-sm text-gray-600">Videos, Sounds</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Downloader Section -->
+    <section class="py-20 bg-white">
+      <div class="container mx-auto px-4 max-w-4xl">
+        <div
+          class="bg-gradient-to-r from-blue-500 to-purple-600 rounded-2xl p-8 text-white shadow-xl"
+        >
+          <h2 class="text-2xl font-bold mb-6 text-center">Try It Now!</h2>
+          <div class="mb-6">
+            <input
+              type="text"
+              placeholder="Paste Instagram, Facebook, YouTube, etc. link here..."
+              class="w-full py-4 px-6 rounded-full text-gray-800 input-glow focus:outline-none"
+            />
+          </div>
+          <div class="flex flex-wrap justify-center gap-4">
+            <button
+              class="download-btn bg-white text-blue-600 py-3 px-8 rounded-full font-semibold flex items-center"
+            >
+              <i class="fas fa-download mr-2"></i> Download Video
+            </button>
+            <button
+              class="download-btn bg-white text-blue-600 py-3 px-8 rounded-full font-semibold flex items-center"
+            >
+              <i class="fas fa-image mr-2"></i> Download Image
+            </button>
+            <button
+              class="download-btn bg-white text-blue-600 py-3 px-8 rounded-full font-semibold flex items-center"
+            >
+              <i class="fas fa-music mr-2"></i> Extract Audio
+            </button>
+          </div>
+          <p class="text-center mt-6 text-blue-100">
+            Supports HD quality up to 4K resolution
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- FAQ Section -->
+    <section id="faq" class="py-20 bg-gray-50">
+      <div class="container mx-auto px-4 max-w-4xl">
+        <h2 class="text-3xl font-bold text-center mb-12">
+          Frequently Asked Questions
+        </h2>
+        <div class="space-y-4">
+          <!-- FAQ Item 1 -->
+          <div class="bg-white p-6 rounded-xl shadow-md">
+            <button
+              class="flex justify-between items-center w-full text-left"
+              onclick="toggleFAQ(1)"
+            >
+              <h3 class="text-lg font-semibold">
+                Is this service free to use?
+              </h3>
+              <i
+                class="fas fa-chevron-down transition-transform duration-300"
+                id="faq-icon-1"
+              ></i>
+            </button>
+            <div class="mt-4 text-gray-600 hidden" id="faq-content-1">
+              Yes! SocialSnap is completely free to use with no hidden charges.
+              We may introduce premium features in the future, but basic
+              downloading will always remain free.
+            </div>
+          </div>
+
+          <!-- FAQ Item 2 -->
+          <div class="bg-white p-6 rounded-xl shadow-md">
+            <button
+              class="flex justify-between items-center w-full text-left"
+              onclick="toggleFAQ(2)"
+            >
+              <h3 class="text-lg font-semibold">
+                Do I need to create an account?
+              </h3>
+              <i
+                class="fas fa-chevron-down transition-transform duration-300"
+                id="faq-icon-2"
+              ></i>
+            </button>
+            <div class="mt-4 text-gray-600 hidden" id="faq-content-2">
+              No account is needed! You can use our service immediately without
+              any registration. We respect your privacy and don't require any
+              personal information.
+            </div>
+          </div>
+
+          <!-- FAQ Item 3 -->
+          <div class="bg-white p-6 rounded-xl shadow-md">
+            <button
+              class="flex justify-between items-center w-full text-left"
+              onclick="toggleFAQ(3)"
+            >
+              <h3 class="text-lg font-semibold">
+                Is it legal to download content from social media?
+              </h3>
+              <i
+                class="fas fa-chevron-down transition-transform duration-300"
+                id="faq-icon-3"
+              ></i>
+            </button>
+            <div class="mt-4 text-gray-600 hidden" id="faq-content-3">
+              The legality depends on how you use the downloaded content. We
+              recommend only downloading content you have permission to use or
+              for personal viewing. Always respect copyright laws and the
+              original creator's rights.
+            </div>
+          </div>
+
+          <!-- FAQ Item 4 -->
+          <div class="bg-white p-6 rounded-xl shadow-md">
+            <button
+              class="flex justify-between items-center w-full text-left"
+              onclick="toggleFAQ(4)"
+            >
+              <h3 class="text-lg font-semibold">
+                What formats and quality options are available?
+              </h3>
+              <i
+                class="fas fa-chevron-down transition-transform duration-300"
+                id="faq-icon-4"
+              ></i>
+            </button>
+            <div class="mt-4 text-gray-600 hidden" id="faq-content-4">
+              We support multiple formats including MP4 for videos, JPG/PNG for
+              images, and MP3 for audio. Quality options range from standard
+              definition up to 4K when available from the source.
+            </div>
+          </div>
+
+          <!-- FAQ Item 5 -->
+          <div class="bg-white p-6 rounded-xl shadow-md">
+            <button
+              class="flex justify-between items-center w-full text-left"
+              onclick="toggleFAQ(5)"
+            >
+              <h3 class="text-lg font-semibold">Why isn't my link working?</h3>
+              <i
+                class="fas fa-chevron-down transition-transform duration-300"
+                id="faq-icon-5"
+              ></i>
+            </button>
+            <div class="mt-4 text-gray-600 hidden" id="faq-content-5">
+              Some possible reasons: 1) The content might be private or deleted,
+              2) The platform may have changed their API, 3) Your link might be
+              incorrect. Try copying the URL again directly from your browser's
+              address bar.
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="bg-gray-900 text-white py-12">
+      <div class="container mx-auto px-4">
+        <div class="grid md:grid-cols-4 gap-10">
+          <div>
+            <div class="flex items-center space-x-2 mb-4">
+              <i class="fas fa-share-alt text-2xl text-blue-400"></i>
+              <h3 class="text-xl font-bold">SocialSnap</h3>
+            </div>
+            <p class="text-gray-400">
+              The ultimate social media downloader for all your favorite
+              platforms.
+            </p>
+            <div class="flex space-x-4 mt-6">
+              <a href="#" class="text-gray-400 hover:text-white transition"
+                ><i class="fab fa-facebook-f"></i
+              ></a>
+              <a href="#" class="text-gray-400 hover:text-white transition"
+                ><i class="fab fa-twitter"></i
+              ></a>
+              <a href="#" class="text-gray-400 hover:text-white transition"
+                ><i class="fab fa-instagram"></i
+              ></a>
+              <a href="#" class="text-gray-400 hover:text-white transition"
+                ><i class="fab fa-youtube"></i
+              ></a>
+            </div>
+          </div>
+          <div>
+            <h4 class="text-lg font-semibold mb-4">Quick Links</h4>
+            <ul class="space-y-2">
+              <li>
+                <a href="#" class="text-gray-400 hover:text-white transition"
+                  >Home</a
+                >
+              </li>
+              <li>
+                <a
+                  href="#features"
+                  class="text-gray-400 hover:text-white transition"
+                  >Features</a
+                >
+              </li>
+              <li>
+                <a
+                  href="#how-it-works"
+                  class="text-gray-400 hover:text-white transition"
+                  >How It Works</a
+                >
+              </li>
+              <li>
+                <a
+                  href="#supported-platforms"
+                  class="text-gray-400 hover:text-white transition"
+                  >Supported Platforms</a
+                >
+              </li>
+              <li>
+                <a href="#faq" class="text-gray-400 hover:text-white transition"
+                  >FAQ</a
+                >
+              </li>
+            </ul>
+          </div>
+          <div>
+            <h4 class="text-lg font-semibold mb-4">Legal</h4>
+            <ul class="space-y-2">
+              <li>
+                <a href="#" class="text-gray-400 hover:text-white transition"
+                  >Terms of Service</a
+                >
+              </li>
+              <li>
+                <a href="#" class="text-gray-400 hover:text-white transition"
+                  >Privacy Policy</a
+                >
+              </li>
+              <li>
+                <a href="#" class="text-gray-400 hover:text-white transition"
+                  >Cookie Policy</a
+                >
+              </li>
+              <li>
+                <a href="#" class="text-gray-400 hover:text-white transition"
+                  >DMCA</a
+                >
+              </li>
+            </ul>
+          </div>
+          <div>
+            <h4 class="text-lg font-semibold mb-4">Contact Us</h4>
+            <ul class="space-y-2 text-gray-400">
+              <li class="flex items-start">
+                <i class="fas fa-envelope mt-1 mr-3"></i>
+                <span>support@socialsnap.com</span>
+              </li>
+              <li class="flex items-start">
+                <i class="fas fa-globe mt-1 mr-3"></i>
+                <span>www.socialsnap.com</span>
+              </li>
+            </ul>
+          </div>
+        </div>
+        <div
+          class="border-t border-gray-800 mt-10 pt-6 text-center text-gray-500"
+        >
+          <p>&copy; 2023 SocialSnap. All rights reserved.</p>
+        </div>
+      </div>
+    </footer>
+
+    <script>
+      // FAQ toggle functionality
+      function toggleFAQ(id) {
+        const content = document.getElementById(`faq-content-${id}`);
+        const icon = document.getElementById(`faq-icon-${id}`);
+
+        if (content.classList.contains("hidden")) {
+          content.classList.remove("hidden");
+          icon.classList.add("transform", "rotate-180");
+        } else {
+          content.classList.add("hidden");
+          icon.classList.remove("transform", "rotate-180");
+        }
+      }
+
+      // Download button functionality (simulated)
+      document.querySelectorAll(".download-btn").forEach((button) => {
+        button.addEventListener("click", function () {
+          const urlInput = document.querySelector('input[type="text"]');
+          if (urlInput.value.trim() === "") {
+            alert("Please paste a valid social media URL first!");
+            return;
+          }
+
+          // Simulate processing
+          button.innerHTML =
+            '<i class="fas fa-spinner fa-spin mr-2"></i> Processing...';
+          button.disabled = true;
+
+          setTimeout(() => {
+            button.innerHTML =
+              '<i class="fas fa-check mr-2"></i> Download Ready!';
+            setTimeout(() => {
+              button.innerHTML =
+                '<i class="fas fa-download mr-2"></i> Download';
+              button.disabled = false;
+            }, 2000);
+          }, 2000);
+        });
+      });
+
+      // Mobile menu toggle (would need more implementation)
+      document
+        .querySelector(".md\\:hidden")
+        .addEventListener("click", function () {
+          alert("Mobile menu would open here in a full implementation");
+        });
+    </script>
+  </body>
+</html>
+
+
+everything should run
+Create a page in web routing to downloads for testing purpose, and make sure to run all the details in the web with
+
+Also make sure to run everything , add additional things like optional login for the whole app
+optional login for all the social media logins. for private posts, age consent for 18+ content
+And make sure to log everything in the UI activities in a log in local DB for reference purpose
+
+Add other things like dark mode and light mode, downloader 
+track all download files in download history, and have a re-download option to redownload all videos
+
+Is the API integrated to this code 
+Use Axios and tanstack to inegrate the code to API, redux tool kit to manage states
+Also make sure to use icons
+Make the switch between light and dark theme as toggle 
+make optional login into the platforms , as a tab in the nav bar,
+
+import React, { useState, useEffect } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import {
+    Button,
+    Dialog,
+    DialogTitle,
+    DialogContent,
+    DialogActions,
+    CircularProgress,
+    Typography,
+    Box,
+    IconButton
+} from '@mui/material';
+import {
+    Instagram as InstagramIcon,
+    YouTube as YouTubeIcon,
+    Twitter as TwitterIcon,
+    MusicNote as TikTokIcon
+} from '@mui/icons-material';
+import authService from '../services/auth.service';
+import { connectPlatform, disconnectPlatform } from '../store/authSlice';
+import { RootState, AppDispatch } from '../store';
+import type { SocialPlatform } from '../types/auth.types';
+
+const PLATFORMS: SocialPlatform[] = [
+    { id: 'instagram', name: 'Instagram' },
+    { id: 'youtube', name: 'YouTube' },
+    { id: 'twitter', name: 'Twitter' },
+    { id: 'tiktok', name: 'TikTok' },
+];
+
+interface SocialLoginProps {
+    open: boolean;
+    onClose: () => void;
+    onSuccess?: () => void;
+}
+
+export default function SocialLogin({ open, onClose, onSuccess }: SocialLoginProps): JSX.Element {
+    const dispatch = useDispatch<AppDispatch>();
+    const [loadingPlatform, setLoadingPlatform] = useState<string | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [connected, setConnected] = useState<Record<string, boolean>>({});
+
+    useEffect(() => {
+        if (open) {
+            void checkAllConnections();
+        }
+    }, [open]);
+
+    const checkAllConnections = async (): Promise<void> => {
+        const status: Record<string, boolean> = {};
+        for (const platform of PLATFORMS) {
+            try {
+                status[platform.id] = await authService.checkPlatformLogin(platform.name);
+            } catch (error) {
+                console.error(`Error checking ${platform.name} connection:`, error);
+                status[platform.id] = false;
+            }
+        }
+        setConnected(status);
+    };
+
+    const handleConnect = async (platform: SocialPlatform): Promise<void> => {
+        try {
+            setLoadingPlatform(platform.id);
+            setError(null);
+            const response = await authService.getAuthUrl(platform.name);
+            if (!response.success || !response.authUrl) {
+                throw new Error(response.error || 'Failed to get auth URL');
+            }
+            const width = 600;
+            const height = 600;
+            const left = window.screenX + (window.outerWidth - width) / 2;
+            const top = window.screenY + (window.outerHeight - height) / 2;
+            const newWindow = window.open(
+                response.authUrl,
+                'Social Login',
+                `width=${width},height=${height},left=${left},top=${top}`
+            );
+            if (!newWindow) throw new Error('Failed to open login window');
+            const checkWindow = setInterval(async () => {
+                if (newWindow.closed) {
+                    clearInterval(checkWindow);
+                    await checkAllConnections();
+                    setLoadingPlatform(null);
+                    if (onSuccess) onSuccess();
+                }
+            }, 1000);
+        } catch (error) {
+            setError(error instanceof Error ? error.message : 'Failed to connect');
+            setLoadingPlatform(null);
+        }
+    };
+
+    const handleDisconnect = async (platform: SocialPlatform): Promise<void> => {
+        try {
+            setLoadingPlatform(platform.id);
+            setError(null);
+            const response = await authService.disconnectPlatform(platform.name);
+            if (!response.success) {
+                throw new Error(response.error || 'Failed to disconnect');
+            }
+            setConnected((prev) => ({ ...prev, [platform.id]: false }));
+            if (onSuccess) onSuccess();
+        } catch (error) {
+            setError(error instanceof Error ? error.message : 'Failed to disconnect');
+        } finally {
+            setLoadingPlatform(null);
+        }
+    };
+
+    const getIcon = (platform: string): JSX.Element | null => {
+        switch (platform) {
+            case 'Instagram': return <InstagramIcon color="secondary" />;
+            case 'YouTube': return <YouTubeIcon color="error" />;
+            case 'Twitter': return <TwitterIcon color="primary" />;
+            case 'TikTok': return <TikTokIcon color="action" />;
+            default: return null;
+        }
+    };
+
+    return (
+        <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+            <DialogTitle>Connect Social Media Accounts</DialogTitle>
+            <DialogContent>
+                {PLATFORMS.map((platform) => (
+                    <Box key={platform.id} sx={{ display: 'flex', alignItems: 'center', mb: 2, gap: 2 }}>
+                        {getIcon(platform.name)}
+                        <Typography sx={{ flex: 1 }}>{platform.name}</Typography>
+                        <Button
+                            variant={connected[platform.id] ? 'outlined' : 'contained'}
+                            color={connected[platform.id] ? 'error' : 'primary'}
+                            onClick={() => connected[platform.id] ? void handleDisconnect(platform) : void handleConnect(platform)}
+                            disabled={loadingPlatform === platform.id}
+                            startIcon={loadingPlatform === platform.id ? <CircularProgress size={20} /> : null}
+                        >
+                            {connected[platform.id] ? 'Disconnect' : 'Connect'}
+                        </Button>
+                    </Box>
+                ))}
+                {error && (
+                    <Typography color="error" variant="body2">
+                        {error}
+                    </Typography>
+                )}
+            </DialogContent>
+            <DialogActions>
+                <Button onClick={onClose}>Close</Button>
+            </DialogActions>
+        </Dialog>
+    );
+} 
+
+And make sure have a test file to test the integration, ui changes, and components, to run and test it 
+
+write jest  unit test cases to test everything and make the coverage to 95%
+  Proceed with all the steps Before starting,   the mobile app saves the file in local Downloads/Social Downloader / XXX, that XXX be Video for videos and Audio for audios,and Image for images
+So ask the permission to save the file in local and once given proceed forward to the app, If the user says no, then proceed to say, we cannot start the app without that permission, it's the default permission needed to start the app and after it's given, give some slides to explain the app, with next and skip option, When every I want to download videos from insta or youtube, we'll just click share, so this app must be in the share sheet, so the user can just click share and select the app and it must download, after downloading a small notificaion saying download complete Also show a progress bar when downloading
+
+make sure to get all permission before starting
+
+And make sure to proceed forward after this
+  Build using expo
+
+
+
+Use nave bar for navigation between pages
+
+Add more screens to check the details   This is the sample Package.json {
+  "name": "social-saver",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "expo start --dev-client",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "test": "jest",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^13.0.0",
+    "@react-navigation/bottom-tabs": "^6.5.9",
+    "@react-navigation/native": "^6.1.7",
+    "@reduxjs/toolkit": "^1.9.7",
+    "expo": "^50.0.0",
+    "expo-file-system": "~16.0.0",
+    "expo-media-library": "~16.0.0",
+    "expo-notifications": "~0.26.0",
+    "react": "18.2.0",
+    "react-native": "0.73.6",
+    "react-native-paper": "5.11.1",
+    "react-native-safe-area-context": "4.8.2",
+    "react-redux": "8.1.3",
+    "redux-persist": "6.0.0",
+    "@react-native-async-storage/async-storage": "^1.19.0",
+    "axios": "^1.6.2",
+    "expo-dev-client": "~3.3.12",
+    "expo-status-bar": "~1.11.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.23.5",
+    "@storybook/react-native": "^8.6.2",
+    "@types/axios": "^0.9.36",
+    "@types/react": "~18.2.0",
+    "@types/react-native": "~0.73.0",
+    "@types/react-redux": "^7.1.34",
+    "@typescript-eslint/eslint-plugin": "^6.13.1",
+    "@typescript-eslint/parser": "^6.13.1",
+    "eslint": "^8.55.0",
+    "jest": "^29.7.0",
+    "typescript": "^5.3.0"
+  }
+}
+
